@@ -2,163 +2,239 @@ import cv2
 import face_recognition
 import os
 import numpy as np
+import threading
 
 
-def inicializar_sistema():
-    """
-    Inicializa o sistema de reconhecimento facial.
-    Apenas imprime a mensagem inicial.
-    """
-    print("Iniciando o sistema de Reconhecimento Facial...")
+class WebcamStream:
+
+    def __init__(self, src=0):
+
+        self.stream = cv2.VideoCapture(src)
+
+        # RESOLUÇÃO DA EXIBIÇÃO
+        self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        # REDUZ ATRASO
+        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        self.grabbed, self.frame = self.stream.read()
+
+        self.stopped = False
+
+    def start(self):
+
+        threading.Thread(
+            target=self.update,
+            daemon=True
+        ).start()
+
+        return self
+
+    def update(self):
+
+        while not self.stopped:
+
+            self.grabbed, self.frame = self.stream.read()
+
+    def read(self):
+
+        return self.frame
+
+    def stop(self):
+
+        self.stopped = True
+        self.stream.release()
 
 
-def obter_diretorio_base():
-    """
-    Retorna o diretório onde o arquivo principal (main.py) está localizado.
-    """
-    return os.path.dirname(os.path.abspath(__file__))
+def carregar_rostos():
 
+    diretorio = os.path.dirname(os.path.abspath(__file__))
 
-def preparar_pasta_conhecidos(diretorio_atual):
-    """
-    Garante que a pasta de rostos conhecidos exista.
-    Se não existir, cria a pasta e orienta o usuário.
-    """
-    pasta_conhecidos = os.path.join(diretorio_atual, "rostos_conhecidos")
+    pasta = os.path.join(diretorio, "rostos_conhecidos")
 
-    if not os.path.exists(pasta_conhecidos):
-        os.makedirs(pasta_conhecidos)
-        print(f"Pasta '{pasta_conhecidos}' criada! Coloque fotos com o seu rosto lá dentro (ex: Davi.jpg)")
+    if not os.path.exists(pasta):
 
-    return pasta_conhecidos
+        os.makedirs(pasta)
 
-
-def carregar_rostos_conhecidos(pasta_conhecidos):
-    """
-    Carrega as imagens da pasta e gera os encodings faciais.
-    Retorna listas de encodings e nomes.
-    """
-    rostos_conhecidos = []
+    encodings_conhecidos = []
     nomes_conhecidos = []
 
-    for arquivo in os.listdir(pasta_conhecidos):
-        if arquivo.endswith(('.jpg', '.jpeg', '.png')):
-            caminho_imagem = os.path.join(pasta_conhecidos, arquivo)
+    for arquivo in os.listdir(pasta):
+
+        if arquivo.endswith((".jpg", ".jpeg", ".png")):
+
+            caminho = os.path.join(pasta, arquivo)
+
             nome = os.path.splitext(arquivo)[0]
 
             try:
-                foto = face_recognition.load_image_file(caminho_imagem)
-                encoding = face_recognition.face_encodings(foto)[0]
-                rostos_conhecidos.append(encoding)
-                nomes_conhecidos.append(nome)
-                print(f"Rosto de '{nome}' carregado com sucesso!")
-            except Exception as e:
-                print(f"Não foi possível carregar ou encontrar um rosto em '{arquivo}'.")
 
-    return rostos_conhecidos, nomes_conhecidos
+                imagem = face_recognition.load_image_file(caminho)
 
+                encoding = face_recognition.face_encodings(imagem)
 
-def iniciar_webcam():
-    """
-    Inicializa a webcam padrão (índice 0).
-    """
-    print("\nAbrindo a webcam... (Pressione 'q' para sair)")
-    return cv2.VideoCapture(0)
+                if len(encoding) > 0:
 
+                    encodings_conhecidos.append(encoding[0])
 
-def processar_frame(frame):
-    """
-    Reduz o frame, converte para RGB e garante formato correto para o face_recognition.
-    Retorna o frame convertido.
-    """
-    small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-    rgb_small_frame = np.ascontiguousarray(small_frame[:, :, ::-1])
+                    nomes_conhecidos.append(nome)
 
-    print(f"Frame Type: {type(rgb_small_frame)}, Dtype: {rgb_small_frame.dtype}, Shape: {rgb_small_frame.shape}, Contiguous: {rgb_small_frame.flags['C_CONTIGUOUS']}")
+                    print(f"{nome} carregado!")
 
-    if rgb_small_frame.dtype != np.uint8:
-        rgb_small_frame = rgb_small_frame.astype(np.uint8)
+            except:
 
-    if len(rgb_small_frame.shape) != 3 or rgb_small_frame.shape[2] != 3:
-        print("Erro crítico: A câmera não está retornando uma imagem colorida padrão (3 canais).")
-        return None
+                print(f"Erro ao carregar {arquivo}")
 
-    return rgb_small_frame
+    return encodings_conhecidos, nomes_conhecidos
 
 
-def reconhecer_e_desenhar(frame, rgb_small_frame, rostos_conhecidos, nomes_conhecidos):
-    """
-    Detecta rostos no frame, compara com os conhecidos e desenha retângulos e nomes.
-    """
-    localizacao_rostos = face_recognition.face_locations(rgb_small_frame)
-    encodings_rostos_na_tela = face_recognition.face_encodings(rgb_small_frame, localizacao_rostos)
+def reconhecer(
+    frame,
+    encodings_conhecidos,
+    nomes_conhecidos
+):
 
-    for face_encoding, face_location in zip(encodings_rostos_na_tela, localizacao_rostos):
-        matches = face_recognition.compare_faces(rostos_conhecidos, face_encoding)
+    # FRAME PEQUENO APENAS PARA IA
+    small_frame = cv2.resize(
+        frame,
+        (0, 0),
+        fx=0.25,
+        fy=0.25
+    )
+
+    rgb_small = cv2.cvtColor(
+        small_frame,
+        cv2.COLOR_BGR2RGB
+    )
+
+    locais = face_recognition.face_locations(
+        rgb_small,
+        model="hog"
+    )
+
+    encodings = face_recognition.face_encodings(
+        rgb_small,
+        locais
+    )
+
+    nomes = []
+
+    for face_encoding in encodings:
+
         nome = "Desconhecido"
 
-        if True in matches:
-            primeiro_match_index = matches.index(True)
-            nome = nomes_conhecidos[primeiro_match_index]
+        if len(encodings_conhecidos) > 0:
 
-        top, right, bottom, left = face_location
+            distancias = face_recognition.face_distance(
+                encodings_conhecidos,
+                face_encoding
+            )
+
+            melhor = np.argmin(distancias)
+
+            if distancias[melhor] < 0.60:
+
+                nome = nomes_conhecidos[melhor]
+
+        nomes.append(nome)
+
+    return locais, nomes
+
+
+def desenhar(
+    frame,
+    locais,
+    nomes
+):
+
+    for (top, right, bottom, left), nome in zip(locais, nomes):
+
+        # VOLTA ESCALA
         top *= 4
         right *= 4
         bottom *= 4
         left *= 4
 
-        cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
-        cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
+        cv2.rectangle(
+            frame,
+            (left, top),
+            (right, bottom),
+            (0, 255, 0),
+            2
+        )
 
-        font = cv2.FONT_HERSHEY_DUPLEX
-        cv2.putText(frame, nome, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+        cv2.rectangle(
+            frame,
+            (left, bottom - 30),
+            (right, bottom),
+            (0, 255, 0),
+            cv2.FILLED
+        )
 
-
-def loop_principal(video_capture, rostos_conhecidos, nomes_conhecidos):
-    """
-    Loop principal que captura frames da webcam,
-    processa e exibe o reconhecimento facial em tempo real.
-    """
-    while True:
-        ret, frame = video_capture.read()
-
-        if not ret:
-            print("Erro: Não foi possível acessar a câmera ou o frame está vazio.")
-            break
-
-        rgb_small_frame = processar_frame(frame)
-
-        if rgb_small_frame is None:
-            break
-
-        reconhecer_e_desenhar(frame, rgb_small_frame, rostos_conhecidos, nomes_conhecidos)
-
-        cv2.imshow('Video', frame)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-
-def finalizar(video_capture):
-    """
-    Libera a webcam e fecha todas as janelas do OpenCV.
-    """
-    video_capture.release()
-    cv2.destroyAllWindows()
+        cv2.putText(
+            frame,
+            nome,
+            (left + 6, bottom - 6),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            1
+        )
 
 
 def main():
-    """
-    Função principal que orquestra toda a execução do sistema.
-    """
-    inicializar_sistema()
-    diretorio_atual = obter_diretorio_base()
-    pasta_conhecidos = preparar_pasta_conhecidos(diretorio_atual)
-    rostos_conhecidos, nomes_conhecidos = carregar_rostos_conhecidos(pasta_conhecidos)
 
-    video_capture = iniciar_webcam()
-    loop_principal(video_capture, rostos_conhecidos, nomes_conhecidos)
-    finalizar(video_capture)
+    print("Iniciando sistema...")
+
+    encodings_conhecidos, nomes_conhecidos = carregar_rostos()
+
+    webcam = WebcamStream().start()
+
+    locais = []
+    nomes = []
+
+    contador = 0
+
+    while True:
+
+        frame = webcam.read()
+
+        if frame is None:
+            continue
+
+        # ESPELHO
+        frame = cv2.flip(frame, 1)
+
+        # PROCESSA APENAS A CADA 8 FRAMES
+        if contador % 8 == 0:
+
+            locais, nomes = reconhecer(
+                frame,
+                encodings_conhecidos,
+                nomes_conhecidos
+            )
+
+        contador += 1
+
+        desenhar(
+            frame,
+            locais,
+            nomes
+        )
+
+        cv2.imshow(
+            "Reconhecimento Facial",
+            frame
+        )
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+
+            break
+
+    webcam.stop()
+
+    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
